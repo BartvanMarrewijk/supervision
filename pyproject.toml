@@ -83,6 +83,7 @@ dev = [
   "scikit-learn>=1.7",
   "tox>=4.11.4",
   "types-tqdm",
+  "ruff==0.15.22",
 ]
 docs = [
   "mike>=2",

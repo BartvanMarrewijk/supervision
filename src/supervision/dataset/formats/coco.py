@@ -25,7 +25,8 @@ from supervision.detection.utils.converters import (
 )
 from supervision.detection.utils.masks import contains_holes, contains_multiple_segments
 from supervision.utils.file import read_json_file, save_json_file
-from supervision.utils.image import load_image_shape_quick
+
+# from supervision.utils.image import load_image_shape_quick
 
 if TYPE_CHECKING:
     from supervision.dataset.core import DetectionDataset

@@ -16,7 +16,7 @@ from tqdm.auto import tqdm
 from supervision.config import ORIENTED_BOX_COORDINATES
 from supervision.dataset.utils import (
     approximate_mask_with_polygons,
-    check_no_basename_collisions,
+    # check_no_basename_collisions,
 )
 from supervision.detection.core import Detections
 from supervision.detection.utils._typing import _DetectionDataType
