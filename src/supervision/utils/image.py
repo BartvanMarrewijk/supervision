@@ -19,7 +19,7 @@ from deprecate import (  # type: ignore[import-untyped,unused-ignore]
     TargetMode,
     deprecated,
 )
-from PIL import Image
+from PIL import ExifTags, Image
 
 from supervision import _cv2 as cv2
 from supervision.draw.base import ImageType
@@ -152,6 +152,43 @@ def load_image_from_url(
         raise
 
 
+def load_image_shape_quick(path: str) -> tuple[int, int, int]:
+    """
+    For an image path, return image shape (height, width, channels)
+
+    Loading using Pillow is faster than using opencv, since we
+    don't load the entire image.
+
+    Exif orientation is automatically applied when loading
+    via opencv.imread, for PIL we need to explicitly do it.
+    """
+    with Image.open(path) as img:
+        (width, height) = img.size
+        channels = len(img.getbands())
+
+        # correct for exif tags
+        # NOTE: the simpler ImageOps.exif_transpose loads the full
+        # image, so it's not fast
+        exif = img.getexif()
+        orientation = exif.get(ExifTags.Base.Orientation, 1)
+        method = {
+            2: Image.Transpose.FLIP_LEFT_RIGHT,
+            3: Image.Transpose.ROTATE_180,
+            4: Image.Transpose.FLIP_TOP_BOTTOM,
+            5: Image.Transpose.TRANSPOSE,
+            6: Image.Transpose.ROTATE_270,
+            7: Image.Transpose.TRANSVERSE,
+            8: Image.Transpose.ROTATE_90,
+        }.get(orientation)
+        if method in [
+            Image.Transpose.TRANSPOSE,
+            Image.Transpose.ROTATE_90,
+            Image.Transpose.ROTATE_270,
+        ]:
+            (height, width) = (width, height)
+    return height, width, channels
+
+
 @ensure_cv2_image_for_standalone_function
 def crop_image(
     image: ImageType,
@@ -223,6 +260,66 @@ def crop_image(
     raise TypeError(
         f"`image` must be a numpy.ndarray or PIL.Image.Image. Received {type(image)}"
     )
+
+
+def advanced_crop_bbox(
+    image: ImageType,
+    xyxy: np.ndarray,
+    track_ids: np.ndarray | None = None,
+    mask: ImageType | None = None,
+):
+    """
+    Crops regions from an image (mask[optional]) based on bounding boxes
+    and track IDs[optional].
+    Args:
+        image (ImageType): The input image to crop from.
+        xyxy (np.ndarray): Array of bounding boxes in [x0, y0, x1, y1] format.
+        track_ids (np.ndarray | None, optional): Array of track IDs for grouping boxes,
+            or None to crop each box individually.
+        mask (ImageType | None, optional): Optional mask image to crop.
+    Returns:
+    tuple: (cropped_image_list, cropped_mask_list, cropped_id)
+        - cropped_image_list (list): List of cropped images.
+        - cropped_mask_list (list): List of cropped masks empty if mask is None.
+        - cropped_id (list): List of indices or track IDs corresponding to each crop.
+    TODO create advanced_crop_mask
+    """
+
+    if isinstance(track_ids, np.ndarray):
+        if None in track_ids:
+            track_ids = None
+
+    cropped_image_list = []
+    cropped_mask_list = []
+    cropped_id = []
+
+    ## if track_ids is None, just get a cropped image for every detection
+    if track_ids is None:
+        for i, bbox in enumerate(xyxy):
+            cropped_image_list.append(crop_image(image, bbox))
+            if mask is not None:
+                cropped_mask_list.append(crop_image(mask, bbox))
+            cropped_id.append(i)
+        return cropped_image_list, cropped_mask_list, cropped_id
+
+    ## crop based on unique id
+    unique_boxes = np.unique(track_ids)
+    for bbox_id in unique_boxes:
+        bboxes = xyxy[track_ids == bbox_id]
+        # Ensure bboxes is 2D
+        if bboxes.ndim == 1:
+            bboxes = bboxes[np.newaxis, :]
+
+        x0 = max(bboxes[:, 0].min(), 0)
+        y0 = max(bboxes[:, 1].min(), 0)
+        x1 = bboxes[:, 2].max()
+        y1 = bboxes[:, 3].max()
+
+        cropped_image_list.append(crop_image(image, [x0, y0, x1, y1]))
+        if mask is not None:
+            cropped_mask_list.append(crop_image(mask, [x0, y0, x1, y1]))
+        cropped_id.append(bbox_id)
+    return cropped_image_list, cropped_mask_list, cropped_id
 
 
 @ensure_cv2_image_for_standalone_function

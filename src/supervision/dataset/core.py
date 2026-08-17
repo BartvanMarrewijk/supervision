@@ -27,6 +27,18 @@ from supervision.dataset.formats.createml import (
 from supervision.dataset.formats.labelme import (
     load_labelme_annotations,
     save_labelme_annotations,
+from supervision.dataset.formats.coco_semseg import (
+    load_coco_semseg_annotations,
+    load_from_semseg_dir,
+    save_coco_semseg_annotations,
+)
+from supervision.dataset.formats.darwin import (
+    load_darwin_annotations,
+    save_darwin_annotations,
+)
+from supervision.dataset.formats.dotav2 import (
+    load_dotav2_annotations,
+    save_dotav2_annotations,
 )
 from supervision.dataset.formats.pascal_voc import (
     load_pascal_voc_annotations,
@@ -376,6 +388,114 @@ class DetectionDataset(BaseDataset):
         if all_in_memory:
             merged_dataset._images_in_memory = images_in_memory
         return merged_dataset
+
+    @classmethod
+    def from_darwin(
+        cls,
+        images_directory_path: str,
+        annotations_path: str,
+        classes: list,
+        force_masks: bool = False,
+        force_track_ids: bool = False,
+        with_ellipse_as: str | None = None,
+    ) -> DetectionDataset:
+        classes, images, annotations = load_darwin_annotations(
+            images_directory_path=images_directory_path,
+            annotation_directory_path=annotations_path,
+            classes=classes,
+            force_masks=force_masks,
+            force_track_ids=force_track_ids,
+            with_ellipse_as=with_ellipse_as,
+        )
+        return DetectionDataset(classes=classes, images=images, annotations=annotations)
+
+    def as_darwin(
+        self,
+        darwin_dataset_name: str,
+        images_directory_path: str | None = None,
+        annotations_directory_path: str | None = None,
+    ) -> None:
+        """
+        Exports the dataset to darwinv7 format. This method saves the images
+        and their corresponding annotations in darwin format.
+
+        Args:
+            images_directory_path (str | None): The path to the directory
+                where the images should be saved.
+                If not provided, images will not be saved.
+            annotations_directory_path (str | None): The path to the directory
+                where the annotations in darwin format should be saved.
+                If not provided, annotations will not be saved.
+        """
+        if images_directory_path:
+            save_dataset_images(
+                dataset=self,
+                images_directory_path=images_directory_path,
+            )
+        if annotations_directory_path:
+            save_darwin_annotations(
+                dataset=self,
+                annotation_directory_path=annotations_directory_path,
+                classes=self.classes,
+                darwin_dataset_name=darwin_dataset_name,
+            )
+        return
+
+    @classmethod
+    def from_dotav2(
+        self,
+        image_directory_path: str,
+        annotations_directory_path: str,
+        classes: list[str],
+    ) -> DetectionDataset:
+        """
+        Creates a Dataset instance from DOTAv2 formatted data.
+
+        Args:
+            image_directory_path (str): The path to the images.
+            annotations_directory_path (str): The path to the annotations.
+            classes (list[str]): List of class names.
+        Returns:
+            DetectionDataset: A DetectionDataset instance containing
+                the loaded images with oriented bounding box annotations.
+        """
+        classes, image_paths, annotations = load_dotav2_annotations(
+            image_directory_path=image_directory_path,
+            annotations_directory_path=annotations_directory_path,
+            classes=classes,
+        )
+        return DetectionDataset(
+            classes=classes, images=image_paths, annotations=annotations
+        )
+
+    def as_dotav2(
+        self,
+        images_directory_path: str | None = None,
+        annotations_directory_path: str | None = None,
+    ) -> None:
+        """
+        Exports the dataset to DOTAv2 format. This method saves the images
+        and their corresponding annotations in DOTAv2 format.
+
+        Args:
+            images_directory_path (str | None): The path to the directory
+                where the images should be saved.
+                If not provided, images will not be saved.
+            annotations_directory_path (str | None): The path to the directory
+                where the annotations in DOTAv2 format should be saved.
+                If not provided, annotations will not be saved.
+        """
+        if images_directory_path:
+            save_dataset_images(
+                dataset=self,
+                images_directory_path=images_directory_path,
+            )
+        if annotations_directory_path:
+            save_dotav2_annotations(
+                dataset=self,
+                annotations_directory_path=Path(annotations_directory_path),
+            )
+        return
 
     def as_pascal_voc(
         self,
@@ -875,7 +995,7 @@ class DetectionDataset(BaseDataset):
     @classmethod
     def from_coco(
         cls,
-        images_directory_path: str,
+        images_directory_path: str | None,
         annotations_path: str,
         force_masks: bool = False,
         show_progress: bool = False,
@@ -1033,6 +1153,104 @@ class DetectionDataset(BaseDataset):
                 show_progress=show_progress,
             )
         return starting_image_id, starting_annotation_id
+
+    def as_coco_semseg(
+        self,
+        images_directory_path: str | None = None,
+        annotations_path: str | None = None,
+        semseg_per_box: bool = False,
+        segmentation_order: list[str] | None = None,
+        skip_classes: list[str] | None = None,
+    ) -> None:
+        """
+        Exports the dataset in COCO semantic segmentation format.
+
+        Args:
+            images_directory_path (str | None): Path to save dataset images.
+                If None, images are not saved.
+            annotations_path (str | None): Path to save COCO semantic segmentation
+                annotations, for example: /path/train.json. If None, annotations are
+                not saved.
+            semseg_per_box (bool): If True, generates a separate segmentation mask
+                for each bounding box.
+            segmentation_order (list[str] | None): List specifying the order of
+                classes for segmentation masks.
+            skip_classes (list[str] | None): List of class names to skip during mask
+                creation.
+        Returns:
+            None
+        """
+        if annotations_path is not None:
+            save_coco_semseg_annotations(
+                dataset=self,
+                images_directory_path=images_directory_path,
+                annotation_path=annotations_path,
+                semseg_per_box=semseg_per_box,
+                segmentation_order=segmentation_order,
+                skip_classes=skip_classes,
+            )
+
+    @classmethod
+    def from_coco_semseg(
+        cls,
+        annotations_path: str,
+        classes: list[str],
+        images_directory_path: str | None = None,
+    ):
+        """
+        Creates a DetectionDataset instance from COCO semantic segmentation
+        annotations.
+
+        Args:
+            annotations_path (str): Path to the COCO-format annotation file.
+            classes (list[str]): List of class names corresponding to the dataset.
+            images_directory_path (str | None, optional): Path to the directory
+            containing images. Defaults to None.
+
+        Returns:
+            DetectionDataset: An instance of DetectionDataset initialized.
+
+        Note:
+            This method expects the annotation file to be in COCO semantic
+            segmentation format:
+            [{"file_name": test.png,
+                "sem_seg_file_name": semseg/test.png,
+                "height": 100,
+                "width": 100},
+            ...]
+        """
+
+        images, annotations = load_coco_semseg_annotations(
+            images_directory_path=images_directory_path,
+            annotations_path=annotations_path,
+            id2label={x: class_name for x, class_name in enumerate(classes)},
+        )
+        return DetectionDataset(classes=classes, images=images, annotations=annotations)
+
+    @classmethod
+    def from_semseg_dir(
+        cls,
+        images_directory_path: str,
+        classes: list[str],
+        annotations_path: str,
+    ):
+        """
+        Creates a DetectionDataset instance from a semantic segmentation directory.
+
+        Args:
+            images_directory_path (str): Path to the directory containing images.
+            classes (list[str]): List of class names.
+            annotations_path (str): Path to the directory containing annotation files.
+
+        Returns:
+            DetectionDataset: An instance of DetectionDataset.
+        """
+        images, annotations = load_from_semseg_dir(
+            images_directory_path=images_directory_path,
+            annotations_path=annotations_path,
+            id2label={x: class_name for x, class_name in enumerate(classes)},
+        )
+        return DetectionDataset(classes=classes, images=images, annotations=annotations)
 
 
 @dataclass

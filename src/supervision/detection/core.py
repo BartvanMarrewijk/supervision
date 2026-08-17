@@ -16,6 +16,9 @@ from supervision.config import (
 )
 from supervision.detection._geometry_dispatch import detection_area, detection_iou
 from supervision.detection.compact_mask import CompactMask
+from supervision.detection.tools.darwin import (
+    darwin_annotations_to_detections_dict,
+)
 from supervision.detection.tools.transformers import (
     process_transformers_detection_result,
     process_transformers_v4_segmentation_result,
@@ -260,6 +263,35 @@ class Detections:
                 is_metadata_equal(self.metadata, other.metadata),
             ]
         )
+
+    @classmethod
+    def from_darwin(
+        cls,
+        json_name: str,
+        with_masks: bool,
+        classes: list[str],
+        with_ellipse_as: str | None = None,
+        with_track_ids: bool = False,
+        skip_unknown_classes: bool = True,
+        metadata: dict = {},
+    ) -> Detections:
+        result_dict = darwin_annotations_to_detections_dict(
+            json_name=json_name,
+            with_masks=with_masks,
+            classes=classes,
+            with_ellipse_as=with_ellipse_as,
+            with_track_ids=with_track_ids,
+            skip_unknown_classes=skip_unknown_classes,
+            metadata=metadata,
+        )
+        if len(result_dict["xyxy"]) == 0:
+            obj = cls.empty()
+            if "data" in result_dict:
+                obj.data = result_dict["data"]
+            if "metadata" in result_dict:
+                obj.metadata = result_dict["metadata"]
+            return obj
+        return cls(**result_dict)
 
     @classmethod
     def from_yolov5(cls, yolov5_results: Any) -> Detections:
@@ -3543,3 +3575,22 @@ def validate_fields_both_defined_or_none(
     detections_1: Detections, detections_2: Detections
 ) -> None:
     void(detections_1, detections_2)
+
+def reorder_detections(detections: Detections, segmentation_order_id: list[int]):
+    """
+    Reorders Detections so that objects with class IDs in
+    segmentation_order_id appear first, in the given order. Remaining
+    objects are appended in their original order.
+    """
+    if not segmentation_order_id:
+        return detections
+
+    order = []
+    for class_id in segmentation_order_id:
+        idxs = np.where(detections.class_id == class_id)[0]
+        order.extend(idxs.tolist())
+    # Add any remaining indices not in segmentation_order_id
+    remaining = [i for i in range(len(detections.class_id)) if i not in order]
+    order.extend(remaining)
+    detections = detections[order]
+    return detections

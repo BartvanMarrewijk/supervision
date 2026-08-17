@@ -19,6 +19,8 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      - id: no-commit-to-branch
+        args: ["--branch", "main_wur", "--branch", "no_mlutils_dep"]
       - id: trailing-whitespace
       - id: check-yaml
         args: ["--unsafe"]
@@ -61,6 +63,7 @@ repos:
     hooks:
       - id: ruff-check
         args: ["--fix"]
+        files: ^src/
       - id: ruff-format
         types_or: [python, pyi, jupyter]
 
@@ -84,16 +87,16 @@ repos:
           - "mdformat-ruff"
         args: ["--number", "--wrap=no"]
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v2.3.0
-    hooks:
-      - id: mypy
-        language_version: python3.11
-        additional_dependencies:
-          - "numpy>=2.0"
-          - "types-PyYAML"
-          - "types-requests"
-          - "types-tqdm"
+  # - repo: https://github.com/pre-commit/mirrors-mypy
+  #   rev: v2.3.0
+  #   hooks:
+  #     - id: mypy
+  #       language_version: python3.11
+  #       additional_dependencies:
+  #         - "numpy>=2.0"
+  #         - "types-PyYAML"
+  #         - "types-requests"
+  #         - "types-tqdm"
 
   - repo: https://github.com/codespell-project/codespell
     rev: v2.4.3

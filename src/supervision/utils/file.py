@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import datetime
 import json
 import os
 import tempfile
@@ -6,6 +9,7 @@ from pathlib import Path
 from shutil import copyfileobj
 from typing import Any
 
+import natsort
 import numpy as np
 import requests
 import yaml
@@ -111,6 +115,23 @@ class NumpyJsonEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
+class ExtendedJSONEncoder(json.JSONEncoder):
+    """Special json encoder for numpy types, paths and datetimes"""
+
+    def default(self, obj: Any) -> Any:
+        if isinstance(obj, (datetime.datetime, datetime.date, datetime.time)):
+            return obj.isoformat()
+        if isinstance(obj, Path):
+            return str(obj)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
 def list_files_with_extensions(
     directory: str | Path, extensions: list[str] | None = None
 ) -> list[Path]:
@@ -179,6 +200,86 @@ def list_files_with_extensions(
         files_with_extensions.extend(p for p in directory.glob("*") if p.is_file())
 
     return files_with_extensions
+
+
+def list_files_with_extensions_recursively(
+    directory: str | Path, extensions: list[str] | None = None
+) -> list[Path]:
+    """
+    list files in a directory and its subdirectories with specified extensions
+        or all files if no extensions are provided.
+
+    Args:
+        directory (Union[str, Path]): The directory path as a string or Path object.
+        extensions (Optional[list[str]]): A list of file extensions to filter.
+            Default is None, which lists all files.
+
+    Returns:
+        (list[Path]): A list of Path objects for the matching files.
+    """
+    directory = Path(directory)
+    files_with_extensions: list[Path] = []
+
+    if extensions is not None:
+        for ext in extensions:
+            files_with_extensions.extend(directory.rglob(f"*.{ext}"))
+    else:
+        files_with_extensions.extend(directory.rglob("*"))
+
+    return files_with_extensions
+
+
+def find_valid_images_and_annotations(
+    images_directory_path: Path | list[Path],
+    annotation_path: Path | list[Path],
+    images_extentions: list[str] = ["jpg", "jpeg", "png", "tiff", "tif"],
+    annotation_extentions: list[str] = ["json"],
+) -> tuple[list[Path], list[Path]]:
+    """
+    Find and match valid image files with their corresponding annotation files.
+    If images_directory_path or annotation path is directory will search
+    resurively in the folder. If input is list of paths will only find valid pairs
+
+    Args:
+        images_directory_path (Path | list[Path]): Directory or list of image paths.
+        annotation_path (Path | list[Path]): Directory or list of annotation paths.
+        images_extentions (list[str], optional): Valid image file extensions.
+        annotation_extentions (list[str], optional): Valid annotation file extensions.
+
+    Returns:
+        tuple[list[Path], list[Path]]:
+            - List of image file paths with matching annotation files.
+            - List of annotation file paths, sorted naturally.
+    """
+    if isinstance(images_directory_path, Path):
+        image_candidate_paths = list_files_with_extensions_recursively(
+            directory=images_directory_path,
+            extensions=images_extentions,
+        )
+    else:
+        image_candidate_paths = images_directory_path
+
+    image_candidate_stems = [path.stem for path in image_candidate_paths]
+    assert len(image_candidate_stems) == len(set(image_candidate_stems)), (
+        "Image filenames must be unique"
+    )
+
+    if isinstance(annotation_path, Path):
+        annotation_paths = list_files_with_extensions_recursively(
+            directory=annotation_path,
+            extensions=annotation_extentions,
+        )
+    else:
+        annotation_paths = annotation_path
+    annotation_paths = natsort.natsorted(annotation_paths)
+
+    image_paths = []
+    for annotation_path in annotation_paths:
+        # find the corresponding image path
+        image_stem = annotation_path.stem
+        image_path = image_candidate_paths[image_candidate_stems.index(image_stem)]
+        image_paths.append(image_path)
+    return image_paths, annotation_paths
 
 
 def read_txt_file(file_path: str | Path, skip_empty: bool = False) -> list[str]:

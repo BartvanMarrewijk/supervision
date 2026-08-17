@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from supervision.detection.utils.converters import (
 )
 from supervision.detection.utils.masks import contains_holes, contains_multiple_segments
 from supervision.utils.file import read_json_file, save_json_file
+from supervision.utils.image import load_image_shape_quick
 
 if TYPE_CHECKING:
     from supervision.dataset.core import DetectionDataset
@@ -322,6 +324,8 @@ def detections_to_coco_annotations(
                     ),
                     "size": list(mask.shape[:2]),
                 }
+            elif mask.sum() == 0:
+                segmentation = []
             else:
                 polygons = approximate_mask_with_polygons(
                     mask=mask_bool,
@@ -341,6 +345,8 @@ def detections_to_coco_annotations(
                         "returned no polygons.",
                         stacklevel=2,
                     )
+                    segmentation = []
+
         else:
             iscrowd = int(np.asarray(data.get("iscrowd", 0)).item())
             # When masks were not decoded during loading, fall back to the raw
@@ -456,7 +462,7 @@ def get_coco_class_index_mapping(annotations_path: str) -> dict[int, int]:
 
 
 def load_coco_annotations(
-    images_directory_path: str,
+    images_directory_path: str | None,
     annotations_path: str,
     force_masks: bool = False,
     use_iscrowd: bool = True,
@@ -522,7 +528,10 @@ def load_coco_annotations(
             coco_image["height"],
         )
         image_annotations = coco_annotations_groups.get(coco_image["id"], [])
-        image_path = str(Path(images_directory_path) / Path(image_name))
+        if images_directory_path is None:
+            image_path = str((Path(annotations_path).parent / image_name).resolve())
+        else:
+            image_path = str((Path(images_directory_path) / image_name).resolve())
         try:
             resolved_image_path = Path(image_path).resolve()
         except (OSError, ValueError) as exc:
@@ -537,12 +546,14 @@ def load_coco_annotations(
                 f"({images_directory_resolved}). Expected a path to an "
                 "image file."
             )
-        if images_directory_resolved not in resolved_image_path.parents:
-            raise ValueError(
-                f"COCO annotation refers to image {image_name!r}, which "
-                f"resolves to {resolved_image_path} — outside the images "
-                f"directory {images_directory_resolved}."
-            )
+        # Bart 2026-05-20 disabled following line because image location
+        # is different from annotation version
+        # if images_directory_resolved not in resolved_image_path.parents:
+        #     raise ValueError(
+        #         f"COCO annotation refers to image {image_name!r}, which "
+        #         f"resolves to {resolved_image_path} — outside the images "
+        #         f"directory {images_directory_resolved}."
+        #     )
         if resolved_image_path.is_dir():
             raise ValueError(
                 f"COCO annotation refers to image {image_name!r}, which "
@@ -696,7 +707,11 @@ def save_coco_annotations(
         # (or the in-memory array) instead of iterating the dataset, which
         # would fully decode every image just to inspect its shape.
         image_height, image_width = _image_resolution_hw(dataset, image_path)
-        image_name = f"{Path(image_path).stem}{Path(image_path).suffix}"
+        image_path_relative = os.path.relpath(
+            Path(image_path).resolve(), start=annotation_path.parent
+        )
+        # image_name = f"{Path(image_path).stem}{Path(image_path).suffix}"
+        image_name = str(image_path_relative)
         coco_image = {
             "id": image_id,
             "license": 1,
@@ -728,3 +743,16 @@ def save_coco_annotations(
     }
     save_json_file(annotation_dict, file_path=annotation_path)
     return image_id, annotation_id
+
+
+if __name__ == "__main__":
+    from pathlib import Path
+
+    base_dir = Path("/mnt/GARdata/datasets/project_name")
+    annotations_path = base_dir / "anns/ann_version/coco/train.json"
+    images_directory_path = base_dir / "images"
+    force_masks: bool = (False,)
+    classes = [
+        "healthy",
+    ]  # (list[str]) target classes
+    load_coco_annotations(str(images_directory_path), str(annotations_path), True)

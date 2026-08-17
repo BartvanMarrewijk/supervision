@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import warnings
 from collections.abc import Sequence
+from functools import partial
+from multiprocessing.pool import ThreadPool
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -26,6 +28,7 @@ from supervision.utils.file import (
     save_text_file,
     save_yaml_file,
 )
+from supervision.utils.image import load_image_shape_quick
 
 if TYPE_CHECKING:
     from supervision.dataset.core import DetectionDataset
@@ -137,9 +140,34 @@ def _extract_class_names(file_path: str) -> list[str]:
     )
 
 
+def _relative_image_path(image_path: str, image_directory_name="images"):
+    """
+    Returns the relative path starting from a directory name.
+
+    Default image base directory is "images"
+    """
+    images_dirname = os.path.sep + image_directory_name + os.path.sep
+    relative_path_image = image_path.split(images_dirname)[-1]
+    return relative_path_image
+
+
+# def _image_name_to_annotation_name(image_name: str) -> str:
+#     base_name, _ = os.path.splitext(image_name)
+#     return base_name + ".txt"
+
+
 def _image_name_to_annotation_name(image_name: str) -> str:
-    base_name, _ = os.path.splitext(image_name)
-    return base_name + ".txt"
+    """
+    Returns the yolo-style annotation path.
+
+    Note that ultralytics finds annotations by replacing "/images/" with "/annotations/"
+    For nested image directories, the annotations should be stored in a nested
+    directory as well.
+    """
+    relative_path_image = _relative_image_path(image_name)
+    base_name, _ = os.path.splitext(relative_path_image)
+    relative_path_annotation = base_name + ".txt"
+    return relative_path_annotation
 
 
 def yolo_annotations_to_detections(
@@ -441,65 +469,120 @@ def save_yolo_annotations(
     max_image_area_percentage: float = 1.0,
     approximation_percentage: float = 0.75,
     is_obb: bool = False,
-    show_progress: bool = False,
 ) -> None:
-    """Save dataset annotations in YOLO format.
-
-    Args:
-        dataset: The dataset whose annotations are saved.
-        annotations_directory_path: Path to the directory where annotation
-            ``.txt`` files are written; created automatically if absent.
-        min_image_area_percentage: Minimum detection area as a fraction of the
-            image area; smaller detections are omitted. Ignored when
-            ``is_obb=True``.
-        max_image_area_percentage: Maximum detection area as a fraction of the
-            image area; larger detections are omitted. Ignored when
-            ``is_obb=True``.
-        approximation_percentage: Fraction of polygon points removed during
-            contour approximation when saving mask annotations. Ignored when
-            ``is_obb=True``.
-        is_obb: If ``True``, writes oriented bounding-box annotations using
-            the 9-token format ``class_id x1 y1 x2 y2 x3 y3 x4 y4``. Each
-            non-empty detection must carry ``detections.data['xyxyxyxy']``
-            with shape ``(N, 4, 2)``.
-        show_progress: If ``True``, display a tqdm progress bar while
-            saving annotations.
-
-    Examples:
-        ```pycon
-        >>> from supervision.dataset.core import DetectionDataset
-        >>> from supervision.dataset.formats.yolo import save_yolo_annotations
-        >>> dataset = DetectionDataset(classes=["cat"], images={}, annotations={})
-        >>> save_yolo_annotations(dataset, "/tmp/labels")
-
-        ```
-    """
-    check_no_basename_collisions(
-        image_paths=dataset.image_paths,
-        key=lambda image_path: _image_name_to_annotation_name(Path(image_path).name),
-        output_kind="YOLO annotation",
-    )
     Path(annotations_directory_path).mkdir(parents=True, exist_ok=True)
-    for image_path, image, annotation in tqdm(
-        dataset,
-        total=len(dataset),
-        desc="Saving YOLO annotations",
-        disable=not show_progress,
-    ):
-        image_name = Path(image_path).name
-        yolo_annotations_name = _image_name_to_annotation_name(image_name=image_name)
-        yolo_annotations_path = os.path.join(
-            annotations_directory_path, yolo_annotations_name
+
+    with ThreadPool() as pool:
+        pool.map(
+            partial(
+                save_yolo_annotation,
+                dataset=dataset,
+                annotations_directory_path=annotations_directory_path,
+                min_image_area_percentage=min_image_area_percentage,
+                max_image_area_percentage=max_image_area_percentage,
+                approximation_percentage=approximation_percentage,
+                is_obb=is_obb,
+            ),
+            range(len(dataset)),
         )
-        lines = detections_to_yolo_annotations(
-            detections=annotation,
-            image_shape=image.shape,
-            min_image_area_percentage=min_image_area_percentage,
-            max_image_area_percentage=max_image_area_percentage,
-            approximation_percentage=approximation_percentage,
-            is_obb=is_obb,
-        )
-        save_text_file(lines=lines, file_path=yolo_annotations_path)
+    return
+
+
+def save_yolo_annotation(
+    index: int,
+    dataset: DetectionDataset,
+    annotations_directory_path: str,
+    min_image_area_percentage: float = 0.0,
+    max_image_area_percentage: float = 1.0,
+    approximation_percentage: float = 0.75,
+    is_obb: bool = False,
+) -> None:
+    image_path = dataset.image_paths[index]
+    image_shape = load_image_shape_quick(image_path)
+    annotation = dataset.annotations[image_path]
+
+    yolo_annotations_path_rel = _image_name_to_annotation_name(image_name=image_path)
+    yolo_annotations_path_abs = (
+        Path(annotations_directory_path) / yolo_annotations_path_rel
+    )
+    yolo_annotations_path_abs.parent.mkdir(exist_ok=True, parents=True)
+    lines = detections_to_yolo_annotations(
+        detections=annotation,
+        image_shape=image_shape,  # type: ignore
+        min_image_area_percentage=min_image_area_percentage,
+        max_image_area_percentage=max_image_area_percentage,
+        approximation_percentage=approximation_percentage,
+        is_obb=is_obb,
+    )
+    save_text_file(lines=lines, file_path=yolo_annotations_path_abs)
+    return
+
+# def save_yolo_annotations(
+#     dataset: DetectionDataset,
+#     annotations_directory_path: str,
+#     min_image_area_percentage: float = 0.0,
+#     max_image_area_percentage: float = 1.0,
+#     approximation_percentage: float = 0.75,
+#     is_obb: bool = False,
+#     show_progress: bool = False,
+# ) -> None:
+#     """Save dataset annotations in YOLO format.
+
+#     Args:
+#         dataset: The dataset whose annotations are saved.
+#         annotations_directory_path: Path to the directory where annotation
+#             ``.txt`` files are written; created automatically if absent.
+#         min_image_area_percentage: Minimum detection area as a fraction of the
+#             image area; smaller detections are omitted. Ignored when
+#             ``is_obb=True``.
+#         max_image_area_percentage: Maximum detection area as a fraction of the
+#             image area; larger detections are omitted. Ignored when
+#             ``is_obb=True``.
+#         approximation_percentage: Fraction of polygon points removed during
+#             contour approximation when saving mask annotations. Ignored when
+#             ``is_obb=True``.
+#         is_obb: If ``True``, writes oriented bounding-box annotations using
+#             the 9-token format ``class_id x1 y1 x2 y2 x3 y3 x4 y4``. Each
+#             non-empty detection must carry ``detections.data['xyxyxyxy']``
+#             with shape ``(N, 4, 2)``.
+#         show_progress: If ``True``, display a tqdm progress bar while
+#             saving annotations.
+
+#     Examples:
+#         ```pycon
+#         >>> from supervision.dataset.core import DetectionDataset
+#         >>> from supervision.dataset.formats.yolo import save_yolo_annotations
+#         >>> dataset = DetectionDataset(classes=["cat"], images={}, annotations={})
+#         >>> save_yolo_annotations(dataset, "/tmp/labels")
+
+#         ```
+#     """
+#     check_no_basename_collisions(
+#         image_paths=dataset.image_paths,
+#         key=lambda image_path: _image_name_to_annotation_name(Path(image_path).name),
+#         output_kind="YOLO annotation",
+#     )
+#     Path(annotations_directory_path).mkdir(parents=True, exist_ok=True)
+#     for image_path, image, annotation in tqdm(
+#         dataset,
+#         total=len(dataset),
+#         desc="Saving YOLO annotations",
+#         disable=not show_progress,
+#     ):
+#         image_name = Path(image_path).name
+#         yolo_annotations_name = _image_name_to_annotation_name(image_name=image_name)
+#         yolo_annotations_path = os.path.join(
+#             annotations_directory_path, yolo_annotations_name
+#         )
+#         lines = detections_to_yolo_annotations(
+#             detections=annotation,
+#             image_shape=image.shape,
+#             min_image_area_percentage=min_image_area_percentage,
+#             max_image_area_percentage=max_image_area_percentage,
+#             approximation_percentage=approximation_percentage,
+#             is_obb=is_obb,
+#         )
+#         save_text_file(lines=lines, file_path=yolo_annotations_path)
 
 
 def save_data_yaml(data_yaml_path: str, classes: list[str]) -> None:

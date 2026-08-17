@@ -50,6 +50,7 @@ dependencies = [
   "av>=14.2",
   "defusedxml>=0.7.1",
   "matplotlib>=3.6",
+  "natsort>=8.4",
   "numpy>=1.21.2",
   "pillow>=9.4",
   "pydeprecate>=0.9,<0.12",
