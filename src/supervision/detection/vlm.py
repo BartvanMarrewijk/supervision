@@ -10,19 +10,21 @@ from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
+from deprecate import deprecated, void
 from PIL import Image
 
 from supervision.detection.utils.boxes import denormalize_boxes
 from supervision.detection.utils.converters import polygon_to_mask, polygon_to_xyxy
 from supervision.utils.internal import warn_deprecated
-from supervision.validators import validate_resolution
+from supervision.validators import _validate_resolution
 
 
 class LMM(Enum):
     """
     Enum specifying supported Large Multimodal Models (LMMs).
 
-    .. deprecated:: 0.27.0
+    !!! deprecated "Deprecated"
+
         `LMM` is deprecated and will be removed in `supervision-0.31.0`.
         Use `VLM` instead.
 
@@ -80,6 +82,7 @@ class VLM(Enum):
         QWEN_3_VL: Qwen3-VL open vision-language model from Alibaba.
         GOOGLE_GEMINI_2_0: Google Gemini 2.0 vision-language model.
         GOOGLE_GEMINI_2_5: Google Gemini 2.5 vision-language model.
+        GOOGLE_GEMINI_3_5: Google Gemini 3.5 vision-language model.
         MOONDREAM: The Moondream vision-language model.
     """
 
@@ -90,6 +93,7 @@ class VLM(Enum):
     DEEPSEEK_VL_2 = "deepseek_vl_2"
     GOOGLE_GEMINI_2_0 = "gemini_2_0"
     GOOGLE_GEMINI_2_5 = "gemini_2_5"
+    GOOGLE_GEMINI_3_5 = "gemini_3_5"
     MOONDREAM = "moondream"
 
     @classmethod
@@ -120,6 +124,7 @@ RESULT_TYPES: dict[VLM, type] = {
     VLM.DEEPSEEK_VL_2: str,
     VLM.GOOGLE_GEMINI_2_0: str,
     VLM.GOOGLE_GEMINI_2_5: str,
+    VLM.GOOGLE_GEMINI_3_5: str,
     VLM.MOONDREAM: dict,
 }
 
@@ -131,6 +136,7 @@ REQUIRED_ARGUMENTS: dict[VLM, list[str]] = {
     VLM.DEEPSEEK_VL_2: ["resolution_wh"],
     VLM.GOOGLE_GEMINI_2_0: ["resolution_wh"],
     VLM.GOOGLE_GEMINI_2_5: ["resolution_wh"],
+    VLM.GOOGLE_GEMINI_3_5: ["resolution_wh"],
     VLM.MOONDREAM: ["resolution_wh"],
 }
 
@@ -142,6 +148,7 @@ ALLOWED_ARGUMENTS: dict[VLM, list[str]] = {
     VLM.DEEPSEEK_VL_2: ["resolution_wh", "classes"],
     VLM.GOOGLE_GEMINI_2_0: ["resolution_wh", "classes"],
     VLM.GOOGLE_GEMINI_2_5: ["resolution_wh", "classes"],
+    VLM.GOOGLE_GEMINI_3_5: ["resolution_wh", "classes"],
     VLM.MOONDREAM: ["resolution_wh"],
 }
 
@@ -159,7 +166,9 @@ SUPPORTED_TASKS_FLORENCE_2 = [
 ]
 
 
-def validate_vlm_parameters(vlm: VLM | str, result: Any, kwargs: dict[str, Any]) -> VLM:
+def _validate_vlm_parameters(
+    vlm: VLM | str, result: Any, kwargs: dict[str, Any]
+) -> VLM:
     """
     Validates the parameters and result type for a given Vision-Language Model (VLM).
 
@@ -200,9 +209,18 @@ def validate_vlm_parameters(vlm: VLM | str, result: Any, kwargs: dict[str, Any])
     return vlm
 
 
+@deprecated(  # type: ignore[untyped-decorator]
+    target=_validate_vlm_parameters,
+    deprecated_in="0.29.0",
+    remove_in="0.32.0",
+)
+def validate_vlm_parameters(vlm: VLM | str, result: Any, kwargs: dict[str, Any]) -> VLM:
+    return void(vlm, result, kwargs)  # type: ignore[no-any-return]
+
+
 def from_paligemma(
     result: str, resolution_wh: tuple[int, int], classes: list[str] | None = None
-) -> tuple[npt.NDArray[Any], npt.NDArray[Any], npt.NDArray[Any]]:
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any] | None, npt.NDArray[Any]]:
     """
     Parse bounding boxes from paligemma-formatted text, scale them to the specified
     resolution, and optionally filter by classes.
@@ -220,29 +238,29 @@ def from_paligemma(
             is an array of shape `(n,)` with class labels.
     """
 
-    w, h = validate_resolution(resolution_wh)
+    w, h = _validate_resolution(resolution_wh)
 
     pattern = re.compile(
         r"(?<!<loc\d{4}>)<loc(\d{4})><loc(\d{4})><loc(\d{4})><loc(\d{4})> ([\w\s\-]+)"
     )
     matches = pattern.findall(result)
-    matches = np.array(matches) if matches else np.empty((0, 5))
+    matches_arr: npt.NDArray[Any] = np.array(matches) if matches else np.empty((0, 5))
 
-    if matches.shape[0] == 0:
+    if matches_arr.shape[0] == 0:
         return np.empty((0, 4)), np.empty((0,), dtype=int), np.empty(0, dtype=str)
 
-    xyxy, class_name = matches[:, [1, 0, 3, 2]], matches[:, 4]
-    xyxy = xyxy.astype(int) / 1024 * np.array([w, h, w, h])
-    class_name = np.char.strip(class_name.astype(str))
-    class_id = None
+    xyxy_arr = np.array(matches_arr[:, [1, 0, 3, 2]], dtype=float)
+    xyxy_arr = xyxy_arr.astype(int) / 1024 * np.array([w, h, w, h])
+    class_name = np.char.strip(matches_arr[:, 4].astype(str))
+    class_id: npt.NDArray[Any] | None = None
 
     if classes is not None:
         mask = np.array([name in classes for name in class_name], dtype=bool)
-        xyxy = xyxy[mask]
+        xyxy_arr = xyxy_arr[mask]
         class_name = class_name[mask]
         class_id = np.array([classes.index(name) for name in class_name])
 
-    return xyxy, class_id, class_name
+    return xyxy_arr, class_id, class_name
 
 
 def recover_truncated_qwen_2_5_vl_response(text: str) -> Any | None:
@@ -322,8 +340,8 @@ def from_qwen_2_5_vl(
             `class_name` is an array of shape `(N,)` with class names.
     """
 
-    in_w, in_h = validate_resolution(input_wh)
-    out_w, out_h = validate_resolution(resolution_wh)
+    in_w, in_h = _validate_resolution(input_wh)
+    out_w, out_h = _validate_resolution(resolution_wh)
 
     text = result.strip()
     text = re.sub(r"^```(json)?", "", text, flags=re.IGNORECASE).strip()
@@ -357,7 +375,7 @@ def from_qwen_2_5_vl(
     labels_list = []
 
     for item in data:
-        if "bbox_2d" not in item or "label" not in item:
+        if not isinstance(item, dict) or "bbox_2d" not in item or "label" not in item:
             continue
         boxes_list.append(item["bbox_2d"])
         labels_list.append(item["label"])
@@ -435,7 +453,9 @@ def from_deepseek_vl_2(
         A tuple of `(xyxy, class_id, class_name)` where `xyxy` is an array of
             shape `(n, 4)` in format `[x1, y1, x2, y2]`, `class_id` is an
             optional array of shape `(n,)` with class indices, and `class_name`
-            is an array of shape `(n,)` with class labels.
+            is an array of shape `(n,)` with class labels. When the input
+            contains no detections (or all are filtered by `classes`), returns
+            `(np.empty((0, 4)), np.empty(0), np.empty(0))`.
     """  # noqa: E501
 
     width, height = resolution_wh
@@ -448,12 +468,13 @@ def from_deepseek_vl_2(
             f"and det tags ({len(detection_segments)}) in the result must be equal."
         )
 
-    xyxy, class_name_list = [], []
+    xyxy_list: list[list[float]] = []
+    class_name_list: list[str] = []
     for label, detection_blob in zip(label_segments, detection_segments):
         current_class_name = label.strip()
         for box in re.findall(r"\[(.*?)\]", detection_blob):
             x1, y1, x2, y2 = map(float, box.strip("[]").split(","))
-            xyxy.append(
+            xyxy_list.append(
                 [
                     (x1 / 999 * width),
                     (y1 / 999 * height),
@@ -463,8 +484,14 @@ def from_deepseek_vl_2(
             )
             class_name_list.append(current_class_name)
 
-    xyxy = np.array(xyxy, dtype=np.float32)
-    class_name = np.array(class_name_list)
+    xyxy = (
+        np.array(xyxy_list, dtype=np.float32)
+        if xyxy_list
+        else np.empty((0, 4), dtype=np.float32)
+    )
+    class_name = (
+        np.array(class_name_list) if class_name_list else np.array([], dtype=object)
+    )
 
     if classes is not None:
         mask = np.array([name in classes for name in class_name], dtype=bool)
@@ -502,8 +529,13 @@ def from_florence_2(
             optional array of shape `(n, h, w)` with segmentation masks, and
             `obb_boxes` is an optional array of shape `(n, 4, 2)` with oriented
             bounding boxes.
+
+    Raises:
+        ValueError: If the top-level Florence 2 payload has multiple tasks or
+            if a task payload is malformed.
     """
-    assert len(result) == 1, f"Expected result with a single element. Got: {result}"
+    if len(result) != 1:
+        raise ValueError(f"Expected result with a single element. Got: {result}")
     task = next(iter(result.keys()))
     if task not in SUPPORTED_TASKS_FLORENCE_2:
         raise ValueError(
@@ -529,15 +561,15 @@ def from_florence_2(
         return xyxy, labels, None, xyxyxyxy
 
     if task in ["<REFERRING_EXPRESSION_SEGMENTATION>", "<REGION_TO_SEGMENTATION>"]:
-        xyxy_list = []
-        masks_list = []
+        xyxy_list: list[npt.NDArray[Any]] = []
+        masks_list: list[npt.NDArray[Any]] = []
         for polygons_of_same_class in result["polygons"]:
             for polygon in polygons_of_same_class:
                 polygon = np.reshape(polygon, (-1, 2)).astype(np.int32)
                 mask = polygon_to_mask(polygon, resolution_wh).astype(bool)
                 masks_list.append(mask)
-                xyxy = polygon_to_xyxy(polygon)
-                xyxy_list.append(xyxy)
+                xyxy_box = polygon_to_xyxy(polygon)
+                xyxy_list.append(xyxy_box)
             # per-class labels also provided, but they are ["", "", "", ...]
             # when we figure out how to set class names, we can do
             # zip(result["labels"], result["polygons"])
@@ -552,20 +584,20 @@ def from_florence_2(
         return xyxy, labels, None, None
 
     if task in ["<REGION_TO_CATEGORY>", "<REGION_TO_DESCRIPTION>"]:
-        assert isinstance(result, str), (
-            f"Expected string as <REGION_TO_CATEGORY> result, got {type(result)}"
-        )
+        if not isinstance(result, str):
+            raise ValueError(f"Expected string as {task} result, got {type(result)}")
 
         if result == "No object detected.":
             return np.empty((0, 4), dtype=np.float32), np.array([]), None, None
 
         pattern = re.compile(r"<loc_(\d+)><loc_(\d+)><loc_(\d+)><loc_(\d+)>")
         match = pattern.search(result)
-        assert match is not None, (
-            f"Expected string to end in location tags, but got {result}"
-        )
+        if match is None:
+            raise ValueError(
+                f"Expected string to end in location tags, but got {result}"
+            )
 
-        w, h = validate_resolution(resolution_wh)
+        w, h = _validate_resolution(resolution_wh)
         xyxy = np.array([match.groups()], dtype=np.float32)
         xyxy *= np.array([w, h, w, h]) / 1000
         result_string = result[: match.start()]
@@ -573,6 +605,42 @@ def from_florence_2(
         return xyxy, labels, None, None
 
     raise RuntimeError(f"Unimplemented task: {task}")
+
+
+def _recover_gemini_json_objects(text: str) -> list[Any]:
+    """
+    Salvage individual JSON objects from a malformed Gemini JSON array.
+
+    Scans for balanced `{...}` spans and parses each independently, keeping the
+    ones that decode into a `dict` and skipping the rest. This recovers the valid
+    entries from an array that a single `json.loads` would reject wholesale, such
+    as one whose objects contain a mid-array syntax error or a missing key.
+
+    Args:
+        text: The (fence-stripped) response text that failed `json.loads`.
+
+    Returns:
+        The list of successfully parsed objects, which may be empty.
+    """
+    objects: list[Any] = []
+    depth = 0
+    start = None
+    for index, char in enumerate(text):
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                try:
+                    parsed = json.loads(text[start : index + 1])
+                except json.JSONDecodeError:
+                    parsed = None
+                if isinstance(parsed, dict):
+                    objects.append(parsed)
+                start = None
+    return objects
 
 
 def from_google_gemini_2_0(
@@ -614,7 +682,7 @@ def from_google_gemini_2_0(
 
     """
 
-    w, h = validate_resolution(resolution_wh)
+    w, h = _validate_resolution(resolution_wh)
 
     lines = result.splitlines()
     for i, line in enumerate(lines):
@@ -626,13 +694,16 @@ def from_google_gemini_2_0(
     try:
         data = json.loads(result)
     except json.JSONDecodeError:
+        data = _recover_gemini_json_objects(result)
+
+    if not isinstance(data, list):
         return np.empty((0, 4)), np.empty((0,), dtype=int), np.empty((0,), dtype=str)
 
     labels = []
     xyxy = []
 
     for item in data:
-        if "box_2d" not in item or "label" not in item:
+        if not isinstance(item, dict) or "box_2d" not in item or "label" not in item:
             continue
         labels.append(item["label"])
         box = item["box_2d"]
@@ -702,7 +773,7 @@ def from_google_gemini_2_5(
             scores, and `masks` is an optional array of shape `(n, h, w)` with
             segmentation masks.
     """
-    w, h = validate_resolution(resolution_wh)
+    w, h = _validate_resolution(resolution_wh)
 
     lines = result.splitlines()
     for i, line in enumerate(lines):
@@ -714,6 +785,9 @@ def from_google_gemini_2_5(
     try:
         data = json.loads(result)
     except json.JSONDecodeError:
+        data = _recover_gemini_json_objects(result)
+
+    if not isinstance(data, list):
         return (
             np.empty((0, 4)),
             np.array([], dtype=int),
@@ -728,7 +802,7 @@ def from_google_gemini_2_5(
     masks_list: list[npt.NDArray[Any]] | None = []
 
     for item in data:
-        if "box_2d" not in item or "label" not in item:
+        if not isinstance(item, dict) or "box_2d" not in item or "label" not in item:
             continue
         labels_list.append(item["label"])
         box = item["box_2d"]
@@ -743,29 +817,39 @@ def from_google_gemini_2_5(
         if "mask" in item:
             if masks_list is not None:
                 png_str = item["mask"]
-                if not png_str.startswith("data:image/png;base64,"):
+                if not isinstance(png_str, str) or not png_str.startswith(
+                    "data:image/png;base64,"
+                ):
+                    # Malformed mask: keep an empty mask but still fall through to
+                    # the confidence handling below, so the per-item arrays stay
+                    # aligned (a `continue` here desynced confidence vs boxes).
                     masks_list.append(np.zeros((h, w), dtype=bool))
-                    continue
-
-                png_str = png_str.removeprefix("data:image/png;base64,")
-                png_str = base64.b64decode(png_str)
-                mask_img = Image.open(io.BytesIO(png_str))
-
-                y_min, y_max = int(absolute_bbox[1]), int(absolute_bbox[3])
-                x_min, x_max = int(absolute_bbox[0]), int(absolute_bbox[2])
-
-                bbox_height = y_max - y_min
-                bbox_width = x_max - x_min
-
-                if bbox_height > 0 and bbox_width > 0:
-                    mask_img = mask_img.resize(
-                        (bbox_width, bbox_height), resample=Image.Resampling.BILINEAR
-                    )
-                    np_mask: npt.NDArray[np.bool_] = np.zeros((h, w), dtype=bool)
-                    np_mask[y_min:y_max, x_min:x_max] = np.array(mask_img) > 0
-                    masks_list.append(np_mask)
                 else:
-                    masks_list.append(np.zeros((h, w), dtype=bool))
+                    png_str = png_str.removeprefix("data:image/png;base64,")
+                    try:
+                        png_bytes = base64.b64decode(png_str)
+                        mask_img = Image.open(io.BytesIO(png_bytes)).convert("L")
+                    except Exception:
+                        masks_list.append(np.zeros((h, w), dtype=bool))
+                    else:
+                        y_min, y_max = int(absolute_bbox[1]), int(absolute_bbox[3])
+                        x_min, x_max = int(absolute_bbox[0]), int(absolute_bbox[2])
+
+                        bbox_height = y_max - y_min
+                        bbox_width = x_max - x_min
+
+                        if bbox_height > 0 and bbox_width > 0:
+                            mask_img = mask_img.resize(
+                                (bbox_width, bbox_height),
+                                resample=Image.Resampling.BILINEAR,
+                            )
+                            np_mask: npt.NDArray[np.bool_] = np.zeros(
+                                (h, w), dtype=bool
+                            )
+                            np_mask[y_min:y_max, x_min:x_max] = np.array(mask_img) > 0
+                            masks_list.append(np_mask)
+                        else:
+                            masks_list.append(np.zeros((h, w), dtype=bool))
         else:
             masks_list = None
 
@@ -815,6 +899,37 @@ def from_google_gemini_2_5(
         confidence,
         masks,
     )
+
+
+def from_google_gemini_3_5(
+    result: str,
+    resolution_wh: tuple[int, int],
+    classes: list[str] | None = None,
+) -> tuple[
+    npt.NDArray[Any],
+    npt.NDArray[Any] | None,
+    npt.NDArray[Any],
+    npt.NDArray[Any] | None,
+    npt.NDArray[Any] | None,
+]:
+    """
+    Parse and scale bounding boxes and masks from Google Gemini 3.5 style JSON output.
+
+    Gemini 3.5 emits the same detection JSON as Gemini 2.5 (`box_2d` in
+    `[y_min, x_min, y_max, x_max]` normalized to 0-1000, plus `label` and optional
+    `mask`/`confidence`), so parsing delegates to `from_google_gemini_2_5`.
+
+    Args:
+        result: String containing the JSON snippet enclosed by triple backticks.
+        resolution_wh: (output_width, output_height) to which we rescale the boxes.
+        classes: Optional list of valid class names. If provided, returned boxes/labels
+            are filtered to only those classes found here.
+
+    Returns:
+        A tuple of `(xyxy, class_id, class_name, confidence, masks)` matching the
+            `from_google_gemini_2_5` return contract.
+    """
+    return from_google_gemini_2_5(result, resolution_wh, classes)
 
 
 def from_moondream(
