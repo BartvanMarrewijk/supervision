@@ -530,9 +530,9 @@ def load_coco_annotations(
         )
         image_annotations = coco_annotations_groups.get(coco_image["id"], [])
         if images_directory_path is None:
-            image_path = str((Path(annotations_path).parent / image_name).resolve())
+            image_path = str(Path(annotations_path).parent / image_name)
         else:
-            image_path = str((Path(images_directory_path) / image_name).resolve())
+            image_path = str(Path(images_directory_path) / image_name)
         try:
             resolved_image_path = Path(image_path).resolve()
         except (OSError, ValueError) as exc:
