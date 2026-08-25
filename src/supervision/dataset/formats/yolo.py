@@ -16,7 +16,7 @@ from tqdm.auto import tqdm
 from supervision.config import ORIENTED_BOX_COORDINATES
 from supervision.dataset.utils import (
     approximate_mask_with_polygons,
-    # check_no_basename_collisions,
+    check_no_basename_collisions,
 )
 from supervision.detection.core import Detections
 from supervision.detection.utils._typing import _DetectionDataType
@@ -149,12 +149,6 @@ def _relative_image_path(image_path: str, image_directory_name="images"):
     images_dirname = os.path.sep + image_directory_name + os.path.sep
     relative_path_image = image_path.split(images_dirname)[-1]
     return relative_path_image
-
-
-# def _image_name_to_annotation_name(image_name: str) -> str:
-#     base_name, _ = os.path.splitext(image_name)
-#     return base_name + ".txt"
-
 
 def _image_name_to_annotation_name(image_name: str) -> str:
     """
@@ -469,22 +463,34 @@ def save_yolo_annotations(
     max_image_area_percentage: float = 1.0,
     approximation_percentage: float = 0.75,
     is_obb: bool = False,
+    show_progress: bool = False,
 ) -> None:
     Path(annotations_directory_path).mkdir(parents=True, exist_ok=True)
-
-    with ThreadPool() as pool:
-        pool.map(
-            partial(
-                save_yolo_annotation,
-                dataset=dataset,
-                annotations_directory_path=annotations_directory_path,
-                min_image_area_percentage=min_image_area_percentage,
-                max_image_area_percentage=max_image_area_percentage,
-                approximation_percentage=approximation_percentage,
-                is_obb=is_obb,
-            ),
-            range(len(dataset)),
+    check_no_basename_collisions(
+        image_paths=dataset.image_paths,
+        key=lambda image_path: _image_name_to_annotation_name(Path(image_path).name),
+        output_kind="YOLO annotation",
+    )
+    with tqdm(
+        total=len(dataset),
+        desc="Saving YOLO annotations",
+        disable=not show_progress,
+    ) as progress_bar:
+        worker = partial(
+            save_yolo_annotation,
+            dataset=dataset,
+            annotations_directory_path=annotations_directory_path,
+            min_image_area_percentage=min_image_area_percentage,
+            max_image_area_percentage=max_image_area_percentage,
+            approximation_percentage=approximation_percentage,
+            is_obb=is_obb,
         )
+        def _save_and_update(index: int) -> None:
+            worker(index)
+            progress_bar.update(1)
+
+        with ThreadPool() as pool:
+            pool.map(_save_and_update, range(len(dataset)))
     return
 
 
