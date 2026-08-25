@@ -1,14 +1,16 @@
-import os
 from collections.abc import Iterable
 
 import numpy as np
-from inference.models.utils import get_roboflow_model
+from rfdetr import RFDETRMedium
 from tqdm import tqdm
 
 import supervision as sv
+from supervision import _cv2 as cv2
 
 COLORS = sv.ColorPalette.from_hex(["#E6194B", "#3CB44B", "#FFE119", "#3C76D1"])
 
+# COCO class ids (as returned by RF-DETR) for the vehicle types this demo counts.
+VEHICLE_CLASS_IDS = [3, 4, 6, 8]  # car, motorcycle, bus, truck
 
 ZONE_IN_POLYGONS = [
     np.array([[592, 282], [900, 282], [900, 82], [592, 82]]),
@@ -27,6 +29,7 @@ ZONE_OUT_POLYGONS = [
 
 class DetectionsManager:
     def __init__(self) -> None:
+        """Initialize state used to count tracked zone transitions."""
         self.tracker_id_to_zone_id: dict[int, int] = {}
         self.counts: dict[int, dict[int, set[int]]] = {}
 
@@ -36,6 +39,7 @@ class DetectionsManager:
         detections_in_zones: list[sv.Detections],
         detections_out_zones: list[sv.Detections],
     ) -> sv.Detections:
+        """Record zone transitions and rewrite class IDs for annotation."""
         for zone_in_id, detections_in_zone in enumerate(detections_in_zones):
             for tracker_id in detections_in_zone.tracker_id:
                 self.tracker_id_to_zone_id.setdefault(tracker_id, zone_in_id)
@@ -60,6 +64,7 @@ def initiate_polygon_zones(
     polygons: list[np.ndarray],
     triggering_anchors: Iterable[sv.Position] = (sv.Position.CENTER,),
 ) -> list[sv.PolygonZone]:
+    """Create polygon zones sharing the requested triggering anchors."""
     return [
         sv.PolygonZone(
             polygon=polygon,
@@ -72,19 +77,19 @@ def initiate_polygon_zones(
 class VideoProcessor:
     def __init__(
         self,
-        roboflow_api_key: str,
-        model_id: str,
         source_video_path: str,
         target_video_path: str | None = None,
+        device: str = "cpu",
         confidence_threshold: float = 0.3,
         iou_threshold: float = 0.7,
     ) -> None:
+        """Initialize the RF-DETR traffic processor and its annotators."""
         self.conf_threshold = confidence_threshold
         self.iou_threshold = iou_threshold
         self.source_video_path = source_video_path
         self.target_video_path = target_video_path
 
-        self.model = get_roboflow_model(model_id=model_id, api_key=roboflow_api_key)
+        self.model = RFDETRMedium(device=device)
         self.tracker = sv.ByteTrack()
 
         self.video_info = sv.VideoInfo.from_video_path(source_video_path)
@@ -101,6 +106,7 @@ class VideoProcessor:
         self.detections_manager = DetectionsManager()
 
     def process_video(self) -> None:
+        """Process the source video to a sink or live display."""
         frame_generator = sv.get_video_frames_generator(
             source_path=self.source_video_path
         )
@@ -123,6 +129,7 @@ class VideoProcessor:
     def annotate_frame(
         self, frame: np.ndarray, detections: sv.Detections
     ) -> np.ndarray:
+        """Draw zones, tracks, labels, and transition counts on one BGR frame."""
         annotated_frame = frame.copy()
         for i, (zone_in, zone_out) in enumerate(zip(self.zones_in, self.zones_out)):
             annotated_frame = sv.draw_polygon(
@@ -156,10 +163,11 @@ class VideoProcessor:
         return annotated_frame
 
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
-        results = self.model.infer(
-            frame, confidence=self.conf_threshold, iou_threshold=self.iou_threshold
-        )[0]
-        detections = sv.Detections.from_inference(results)
+        """Detect, filter, track, and annotate one BGR traffic frame."""
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        detections = self.model.predict(frame_rgb, threshold=self.conf_threshold)
+        detections = detections[np.isin(detections.class_id, VEHICLE_CLASS_IDS)]
+        detections = detections.with_nms(threshold=self.iou_threshold)
         detections.class_id = np.zeros(len(detections))
         detections = self.tracker.update_with_detections(detections)
 
@@ -180,37 +188,25 @@ class VideoProcessor:
 
 def main(
     source_video_path: str,
-    target_video_path: str,
-    roboflow_api_key: str,
-    model_id: str = "vehicle-count-in-drone-video/6",
+    target_video_path: str | None = None,
+    device: str = "cpu",
     confidence_threshold: float = 0.3,
     iou_threshold: float = 0.7,
 ) -> None:
     """
-    Traffic Flow Analysis with Inference and ByteTrack.
+    Traffic Flow Analysis with RF-DETR and ByteTrack.
 
     Args:
         source_video_path: Path to the source video file
         target_video_path: Path to the target video file (output)
-        roboflow_api_key: Roboflow API key
-        model_id: Roboflow model ID
+        device: Computation device ('cpu', 'mps' or 'cuda')
         confidence_threshold: Confidence threshold for the model
         iou_threshold: IOU threshold for the model
     """
-    api_key = roboflow_api_key
-    api_key = os.environ.get("ROBOFLOW_API_KEY", api_key)
-    if api_key is None:
-        raise ValueError(
-            "Roboflow API KEY is missing. Please provide it as an argument or set the "
-            "ROBOFLOW_API_KEY environment variable."
-        )
-    roboflow_api_key = api_key
-
     processor = VideoProcessor(
-        roboflow_api_key=roboflow_api_key,
-        model_id=model_id,
         source_video_path=source_video_path,
         target_video_path=target_video_path,
+        device=device,
         confidence_threshold=confidence_threshold,
         iou_threshold=iou_threshold,
     )

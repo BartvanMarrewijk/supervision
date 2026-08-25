@@ -97,6 +97,21 @@ class Detections:
     class simplifies data manipulation and filtering, providing a uniform API for
     integration with Supervision [trackers](/trackers/), [annotators](/latest/detection/annotators/), and [tools](/detection/tools/line_zone/).
 
+    === "RF-DETR"
+
+        [RF-DETR](https://github.com/roboflow/rf-detr)'s `predict` method returns a
+        `sv.Detections` object directly, so no conversion step is needed.
+
+        ```python
+        from supervision import _cv2 as cv2
+        import supervision as sv
+        from rfdetr import RFDETRMedium
+
+        model = RFDETRMedium()
+        image = cv2.imread("<SOURCE_IMAGE_PATH>")
+        detections = model.predict(image[:, :, ::-1])
+        ```
+
     === "Inference"
 
         Use [`sv.Detections.from_inference`](/detection/core/#supervision.detection.core.Detections.from_inference)
@@ -107,7 +122,7 @@ class Detections:
         import supervision as sv
         from inference import get_model
 
-        model = get_model(model_id="yolov8n-640")
+        model = get_model(model_id="rfdetr-small")
         image = cv2.imread("<SOURCE_IMAGE_PATH>")
         results = model.infer(image)[0]
         detections = sv.Detections.from_inference(results)
@@ -3084,9 +3099,7 @@ class Detections:
         elif ORIENTED_BOX_COORDINATES in self.data:
             indices = oriented_box_non_max_suppression(
                 predictions=predictions,
-                oriented_boxes=np.asarray(
-                    self.data[ORIENTED_BOX_COORDINATES], dtype=np.float32
-                ),
+                oriented_boxes=np.asarray(self.data[ORIENTED_BOX_COORDINATES]),
                 iou_threshold=threshold,
                 overlap_metric=overlap_metric,
             )
@@ -3234,9 +3247,7 @@ class Detections:
         elif ORIENTED_BOX_COORDINATES in self.data:
             merge_groups = oriented_box_non_max_merge(
                 predictions=predictions,
-                oriented_boxes=np.asarray(
-                    self.data[ORIENTED_BOX_COORDINATES], dtype=np.float32
-                ),
+                oriented_boxes=np.asarray(self.data[ORIENTED_BOX_COORDINATES]),
                 iou_threshold=threshold,
                 overlap_metric=overlap_metric,
             )
@@ -3256,7 +3267,7 @@ class Detections:
 
 
 def _merge_obb_corners(
-    corners_list: list[npt.NDArray[np.floating]],
+    corners_list: list[npt.NDArray[np.number]],
 ) -> npt.NDArray[np.floating]:
     """Merge multiple OBB corner arrays using winner-angle projection.
 
@@ -3269,17 +3280,36 @@ def _merge_obb_corners(
         corners_list: List of (4, 2) corner arrays. First is the winner.
 
     Returns:
-        Merged OBB corners as a (4, 2) float32 array.
+        Merged OBB corners as a (4, 2) floating-point array. Its dtype matches
+        floating inputs and is float64 for integer inputs.
     """
-    all_corners = np.concatenate(corners_list, axis=0).astype(np.float32)
+    input_dtype = np.result_type(*[corners.dtype for corners in corners_list])
+    output_dtype = (
+        input_dtype if np.issubdtype(input_dtype, np.floating) else np.float64
+    )
+    origin = corners_list[0][0]
+    stacked = np.concatenate(corners_list, axis=0)
+    # Translate to the winner's first corner before any float math so large
+    # integer coordinates (e.g. geospatial or stitched frames) are reduced to
+    # local extents. Object arithmetic keeps those integer differences exact
+    # and avoids unsigned wrap-around for corners lying below the origin.
+    if np.issubdtype(input_dtype, np.integer):
+        all_corners = np.asarray(
+            stacked.astype(object) - origin.astype(object), dtype=np.float64
+        )
+    else:
+        all_corners = stacked.astype(np.float64, copy=False) - origin.astype(
+            np.float64, copy=False
+        )
     # Use winner's first edge to derive orientation angle -- avoids
-    # cv2.minAreaRect surprises (e.g. 90-degree flip for wide rects).
-    winner_edge = corners_list[0][1] - corners_list[0][0]
-    angle = float(np.arctan2(winner_edge[1], winner_edge[0]))
+    # cv2.minAreaRect surprises (e.g. 90-degree flip for wide rects). Read it
+    # off the translated corners so it inherits the same wrap-safety.
+    winner_edge = all_corners[1] - all_corners[0]
+    angle = float(np.arctan2(float(winner_edge[1]), float(winner_edge[0])))
     cos, sin = float(np.cos(angle)), float(np.sin(angle))
 
     # De-rotate all corners into the winner's local frame
-    to_local = np.array([[cos, -sin], [sin, cos]], dtype=np.float32)
+    to_local = np.array([[cos, -sin], [sin, cos]], dtype=np.float64)
     local_corners = all_corners @ to_local
     x_min = float(local_corners[:, 0].min())
     x_max = float(local_corners[:, 0].max())
@@ -3287,15 +3317,15 @@ def _merge_obb_corners(
     y_max = float(local_corners[:, 1].max())
 
     # Rotate the enclosing AABB back to world frame
-    to_world = np.array([[cos, sin], [-sin, cos]], dtype=np.float32)
+    to_world = np.array([[cos, sin], [-sin, cos]], dtype=np.float64)
     merged: npt.NDArray[np.floating] = (
         np.array(
             [[x_min, y_min], [x_max, y_min], [x_max, y_max], [x_min, y_max]],
-            dtype=np.float32,
+            dtype=np.float64,
         )
         @ to_world
     )
-    return merged
+    return cast(npt.NDArray[np.floating], (merged + origin).astype(output_dtype))
 
 
 def _merge_detection_group(detections: list[Detections]) -> Detections:
@@ -3323,8 +3353,12 @@ def _merge_detection_group(detections: list[Detections]) -> Detections:
 
     # Area-weighted confidence: each box contributes proportionally to its
     # footprint so large overlapping boxes dominate over small slivers.
-    all_xyxy = np.array([d.xyxy[0] for d in detections], dtype=np.float32)
-    areas = (all_xyxy[:, 2] - all_xyxy[:, 0]) * (all_xyxy[:, 3] - all_xyxy[:, 1])
+    all_xyxy = np.array([d.xyxy[0] for d in detections])
+    widths = all_xyxy[:, 2] - all_xyxy[:, 0]
+    heights = all_xyxy[:, 3] - all_xyxy[:, 1]
+    areas = widths.astype(np.float64, copy=False) * heights.astype(
+        np.float64, copy=False
+    )
 
     confidence: npt.NDArray[np.floating] | None
     if winner.confidence is not None:
