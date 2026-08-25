@@ -34,6 +34,7 @@ FONT_FACES = [
     pytest.param(_FONT_HERSHEY_SCRIPT_COMPLEX, id="script-complex"),
 ]
 
+
 class TestGetTextSize:
     """Text-metric contract of the Pillow fallback getTextSize."""
 

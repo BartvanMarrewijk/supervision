@@ -13,6 +13,7 @@ except ModuleNotFoundError:  # Python 3.10 has no stdlib tomllib
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+
 def _normalize_whitespace(text: str) -> str:
     """Collapse all whitespace runs (including newlines) to single spaces."""
     return " ".join(text.split())

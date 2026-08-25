@@ -69,6 +69,7 @@ def _write_video_with_audio(path: Path, frame_count: int = 5, fps: int = 5) -> N
     finally:
         container.close()
 
+
 def test_importing_supervision_does_not_eagerly_import_pyav() -> None:
     """A plain `import supervision` must not load PyAV's native libraries.
 

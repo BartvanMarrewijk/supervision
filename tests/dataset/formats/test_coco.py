@@ -1488,6 +1488,7 @@ def test_load_coco_annotations_rejects_file_name_resolving_to_images_directory(
             annotations_path=str(annotations_path),
         )
 
+
 def test_load_coco_annotations_rejects_file_name_resolving_to_directory(
     tmp_path,
 ) -> None:

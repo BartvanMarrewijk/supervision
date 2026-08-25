@@ -63,6 +63,7 @@ sys.meta_path.insert(0, BlockCv2())
     environment["PYTHONPATH"] = os.pathsep.join(python_path)
     return environment
 
+
 def test_ordinary_tests_use_facade_instead_of_native_cv2() -> None:
     """Keep ordinary fixtures and regression tests runnable without OpenCV."""
     reference_root = TEST_ROOT / "cv2"

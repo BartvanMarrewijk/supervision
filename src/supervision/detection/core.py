@@ -3610,6 +3610,7 @@ def validate_fields_both_defined_or_none(
 ) -> None:
     void(detections_1, detections_2)
 
+
 def reorder_detections(detections: Detections, segmentation_order_id: list[int]):
     """
     Reorders Detections so that objects with class IDs in

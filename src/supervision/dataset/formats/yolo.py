@@ -150,6 +150,7 @@ def _relative_image_path(image_path: str, image_directory_name="images"):
     relative_path_image = image_path.split(images_dirname)[-1]
     return relative_path_image
 
+
 def _image_name_to_annotation_name(image_name: str) -> str:
     """
     Returns the yolo-style annotation path.
@@ -485,6 +486,7 @@ def save_yolo_annotations(
             approximation_percentage=approximation_percentage,
             is_obb=is_obb,
         )
+
         def _save_and_update(index: int) -> None:
             worker(index)
             progress_bar.update(1)
@@ -522,6 +524,7 @@ def save_yolo_annotation(
     )
     save_text_file(lines=lines, file_path=yolo_annotations_path_abs)
     return
+
 
 # def save_yolo_annotations(
 #     dataset: DetectionDataset,
