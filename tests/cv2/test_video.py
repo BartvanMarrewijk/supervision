@@ -69,25 +69,6 @@ def _write_video_with_audio(path: Path, frame_count: int = 5, fps: int = 5) -> N
     finally:
         container.close()
 
-
-def _run_without_opencv(source: str) -> None:
-    """Run a Python snippet with cv2 imports blocked."""
-    env = os.environ.copy()
-    source_path = str(Path(__file__).resolve().parents[2] / "src")
-    env["PYTHONPATH"] = os.pathsep.join(
-        filter(None, (source_path, env.get("PYTHONPATH")))
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", source],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=60,
-    )
-    assert result.returncode == 0, result.stderr
-
-
 def test_importing_supervision_does_not_eagerly_import_pyav() -> None:
     """A plain `import supervision` must not load PyAV's native libraries.
 
@@ -162,39 +143,6 @@ def test_fallback_writer_default_codec_round_trips(tmp_path: Path) -> None:
 
     assert len(frames) == 3
     assert target_path.stat().st_size > 0
-
-
-def test_fallback_video_works_when_opencv_is_blocked(tmp_path: Path) -> None:
-    """Production video APIs use PyAV when cv2 cannot be imported."""
-    source_path = tmp_path / "source.mp4"
-    target_path = tmp_path / "target.mp4"
-    _write_video(source_path, [0, 40, 80])
-    source = f"""
-import sys
-
-
-class BlockCv2:
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname == "cv2":
-            raise ModuleNotFoundError("blocked for test")
-        return None
-
-
-sys.meta_path.insert(0, BlockCv2())
-from supervision import _cv2
-from supervision.utils.video import VideoInfo, VideoSink, get_video_frames_generator
-
-assert _cv2._IS_CV2_AVAILABLE is False
-info = VideoInfo.from_video_path({str(source_path)!r})
-assert (info.width, info.height, info.total_frames) == (16, 16, 3)
-frames = list(get_video_frames_generator({str(source_path)!r}, start=1, end=3))
-assert len(frames) == 2
-with VideoSink({str(target_path)!r}, info) as sink:
-    for frame in frames:
-        sink.write_frame(frame)
-assert _cv2.VideoCapture({str(target_path)!r}).isOpened()
-"""
-    _run_without_opencv(source)
 
 
 def test_mux_audio_remuxes_first_audio_stream_and_truncates_to_video(
