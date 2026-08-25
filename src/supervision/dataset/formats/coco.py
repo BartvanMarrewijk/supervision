@@ -709,7 +709,7 @@ def save_coco_annotations(
         # would fully decode every image just to inspect its shape.
         image_height, image_width = _image_resolution_hw(dataset, image_path)
         image_path_relative = os.path.relpath(
-            Path(image_path).resolve(), start=annotation_path.parent
+            Path(image_path).resolve(), start=Path(annotation_path).resolve().parent
         )
         # image_name = f"{Path(image_path).stem}{Path(image_path).suffix}"
         image_name = str(image_path_relative)
